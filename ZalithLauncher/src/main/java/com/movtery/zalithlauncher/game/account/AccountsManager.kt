@@ -80,7 +80,7 @@ object AccountsManager {
         authServerDao = database.authServerDao()
     }
 
-    /**
+    /*
      * 刷新当前已登录的账号，已登录的账号保存在数据库中
      */
     fun reloadAccounts() {
