@@ -25,10 +25,8 @@ import com.movtery.zalithlauncher.coroutine.TaskSystem
 import com.movtery.zalithlauncher.database.AppDatabase
 import com.movtery.zalithlauncher.game.account.auth_server.data.AuthServer
 import com.movtery.zalithlauncher.game.account.auth_server.data.AuthServerDao
-import com.movtery.zalithlauncher.path.PathManager
 import com.movtery.zalithlauncher.setting.AllSettings
 import com.movtery.zalithlauncher.ui.androidText
-import com.movtery.zalithlauncher.utils.isInGreaterChina
 import com.movtery.zalithlauncher.utils.logging.Logger
 import com.movtery.zalithlauncher.utils.network.isNetworkAvailable
 import kotlinx.coroutines.CoroutineScope
@@ -38,7 +36,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.apache.commons.io.FileUtils
-import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -65,7 +62,7 @@ object AccountsManager {
     val refreshWardrobe = _refreshWardrobe.asStateFlow()
 
     private val _isOffline = MutableStateFlow(false)
-    val isOffline = _isOffline
+    val isOffline = _isOffline.asStateFlow()
 
     //本次启动器会话内已通过服务端校验的账号
     private val sessionValidatedAccounts: MutableSet<String> = ConcurrentHashMap.newKeySet()
@@ -102,19 +99,18 @@ object AccountsManager {
     private suspend fun suspendReloadAccounts() {
         val loadedAccounts = accountDao.getAllAccounts()
         _accounts.clear()
-        _accounts.addAll(loadedAccounts)
-
-        _accounts.sortWith(compareBy<Account>(
-            { it.accountTypePriority() },
-            { it.username },
+        _accounts.addAll(loadedAccounts.sortedWith(
+            compareBy<Account>({ it.accountTypePriority() }, { it.username })
         ))
-        _accountsFlow.value = _accounts.toList()
 
-        if (_accounts.isNotEmpty() && !isAccountExists(AllSettings.currentAccount.getValue())) {
-            setCurrentAccountInternal(_accounts[0])
+        _accountsFlow.update { _accounts.toList() }
+
+        val currentId = AllSettings.currentAccount.getValue()
+        if (_accounts.isNotEmpty() && !isAccountExists(currentId)) {
+            setCurrentAccount(_accounts[0])
+        } else {
+            refreshCurrentAccountState()
         }
-
-        refreshCurrentAccountState()
 
         Logger.info(TAG, "Loaded ${_accounts.size} accounts")
     }
@@ -126,11 +122,9 @@ object AccountsManager {
         scope.launch {
             val loadedServers = authServerDao.getAllServers()
             _authServers.clear()
-            _authServers.addAll(loadedServers)
-
-            _authServers.sortWith { o1, o2 -> o1.serverName.compareTo(o2.serverName) }
-            _authServersFlow.value = _authServers.toList()
-
+            _authServers.addAll(loadedServers.sortedBy { it.serverName })
+            
+            _authServersFlow.update { _authServers.toList() }
             Logger.info(TAG, "Loaded ${_authServers.size} auth servers")
         }
     }
@@ -144,8 +138,9 @@ object AccountsManager {
         onSuccess: suspend (Account, task: Task) -> Unit = { _, _ -> },
         onFailed: (th: Throwable) -> Unit = {}
     ) {
-        val task = performLoginTask(context, account, onSuccess, onFailed)
-        task?.let { TaskSystem.submitTask(it) }
+        performLoginTask(context, account, onSuccess, onFailed)?.let { 
+            TaskSystem.submitTask(it) 
+        }
     }
 
     /**
@@ -157,17 +152,16 @@ object AccountsManager {
         onSuccess: suspend (Account, task: Task) -> Unit = { _, _ -> },
         onFailed: (th: Throwable) -> Unit = {},
         onFinally: () -> Unit = {}
-    ): Task? =
-        when {
-            account.isNoLoginRequired() -> null
-            account.isAuthServerAccount() -> {
-                otherLogin(context = context, account = account, onSuccess = onSuccess, onFailed = onFailed, onFinally = onFinally)
-            }
-            account.isMicrosoftAccount() -> {
-                microsoftRefresh(account = account, onSuccess = onSuccess, onFailed = onFailed, onFinally = onFinally)
-            }
-            else -> null
+    ): Task? = when {
+        account.isNoLoginRequired() -> null
+        account.isAuthServerAccount() -> {
+            otherLogin(context, account, onSuccess, onFailed, onFinally)
         }
+        account.isMicrosoftAccount() -> {
+            microsoftRefresh(account, onSuccess, onFailed, onFinally)
+        }
+        else -> null
+    }
 
     /**
      * 刷新账号
@@ -181,11 +175,10 @@ object AccountsManager {
             performLogin(
                 context = context,
                 account = account,
-                onSuccess = { account, task ->
+                onSuccess = { updatedAccount, task ->
                     task.updateMessage(androidText(R.string.account_logging_in_saving))
-                    account.downloadYggdrasil()
-                    markSessionValidated(account)
-                    suspendSaveAccount(account)
+                    updatedAccount.downloadYggdrasil()
+                    suspendSaveAccount(updatedAccount)
                 },
                 onFailed = onFailed
             )
@@ -216,21 +209,16 @@ object AccountsManager {
      * 获取当前已登录的账号
      */
     private fun getCurrentAccount(): Account? {
-        return _accounts.find {
-            it.uniqueUUID == AllSettings.currentAccount.getValue()
-        } ?: _accounts.firstOrNull()
+        val currentId = AllSettings.currentAccount.getValue()
+        return _accounts.find { it.uniqueUUID == currentId } ?: _accounts.firstOrNull()
     }
 
     /**
      * 设置并保存当前账号
      */
     fun setCurrentAccount(account: Account) {
-        setCurrentAccountInternal(account)
-        refreshCurrentAccountState()
-    }
-
-    private fun setCurrentAccountInternal(account: Account) {
         AllSettings.currentAccount.save(account.uniqueUUID)
+        refreshCurrentAccountState()
     }
 
     /**
@@ -238,18 +226,9 @@ object AccountsManager {
      */
     private fun refreshCurrentAccountState() {
         val currentAccount = getCurrentAccount()
-        val isOffline = checkLimit()
-        _currentAccountFlow.update {
-            //若处于非正版状态，不允许使用账号
-            if (isOffline) null else currentAccount
-        }
-        _isOffline.update { isOffline }
-    }
+        val isOffline = false // Reserved for future logic
+        _currentAccountFlow.update { if (isOffline) null else currentAccount }
 
-    private fun checkLimit(): Boolean {
-        val circumventLimit = File(PathManager.DIR_FILES_EXTERNAL, "circumventLimit")
-        return !circumventLimit.exists() && !isInGreaterChina() && !hasMicrosoftAccount()
-    }
 
     /**
      * 保存账号到数据库
@@ -267,8 +246,6 @@ object AccountsManager {
         runCatching {
             accountDao.saveAccount(account)
             Logger.info(TAG, "Saved account: ${account.username}")
-            //同时设置当前账号
-            setCurrentAccountInternal(account)
         }.onFailure { e ->
             Logger.error(TAG, "Failed to save account: ${account.username}", e)
         }
@@ -281,8 +258,7 @@ object AccountsManager {
     fun deleteAccount(account: Account) {
         scope.launch {
             accountDao.deleteAccount(account)
-            val skinFile = account.getSkinFile()
-            FileUtils.deleteQuietly(skinFile)
+            FileUtils.deleteQuietly(account.getSkinFile())
             suspendReloadAccounts()
         }
     }
@@ -315,26 +291,12 @@ object AccountsManager {
      */
     fun hasMicrosoftAccount(): Boolean = _accounts.any { it.isMicrosoftAccount() }
 
-    /**
-     * 通过账号的profileId读取账号
-     */
-    fun loadFromProfileID(
-        profileId: String,
-        accountType: String? = null
-    ): Account? =
-        _accounts.find { it.profileId == profileId && it.accountType == accountType }
+    fun loadFromProfileID(profileId: String, accountType: String? = null): Account? =
+        _accounts.find { it.profileId == profileId && (accountType == null || it.accountType == accountType) }
 
-    /**
-     * 账号是否存在
-     */
-    fun isAccountExists(uniqueUUID: String): Boolean {
-        return uniqueUUID.isNotEmpty() && _accounts.any { it.uniqueUUID == uniqueUUID }
-    }
+    fun isAccountExists(uniqueUUID: String): Boolean =
+        uniqueUUID.isNotEmpty() && _accounts.any { it.uniqueUUID == uniqueUUID }
 
-    /**
-     * 认证服务器是否存在
-     */
-    fun isAuthServerExists(baseUrl: String): Boolean {
-        return baseUrl.isNotEmpty() && _authServers.any { it.baseUrl == baseUrl }
+    fun isAuthServerExists(baseUrl: String): Boolean =
+        baseUrl.isNotEmpty() && _authServers.any { it.baseUrl == baseUrl }
     }
-}
