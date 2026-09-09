@@ -1,6 +1,9 @@
+
 # Mellow Launcher
-A lightweight and fast Minecraft Java launcher for Android.
-Fix offline account support & more
+<img width="1254" height="1254" alt="1002633189" src="https://github.com/user-attachments/assets/3f092b0a-6fed-4d02-a2e0-d35e4cec614b" />
+
+**A lightweight and fast Minecraft Java launcher for Android.
+Fix offline account support & more**
 
 > [!IMPORTANT]
 > This project is **Fork** from [ZalithLauncher2](https://github.com/ZalithLauncher/ZalithLauncher2).  
