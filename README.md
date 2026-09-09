@@ -13,11 +13,11 @@ this project uses translation from [Zalith Launcher 2 Weblate project](https://h
 ## What New Features in **Melow Launcher**?
 Enhance the quality of your gaming experience.
 
-[×] Offline/Local account fix
-[ ] In Game Recorder Tool
-[ ] Skin & Cape Customization System
-[ ] Fixes some bugs
-[×] and more..
+- Offline/Local account fix
+- In Game Recorder Tool port from zeryth
+- Skin & Cape Customization System
+- Fixes some bugs
+  and more..
 
 
 ## 📦 Build Instructions (For Developers)
